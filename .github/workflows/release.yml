@@ -1,0 +1,96 @@
+name: release
+
+# Build a binary for every supported platform on its own OS runner (the
+# backends use platform-native FFI, so each target must be compiled on that
+# platform). Triggered by pushing a version tag like v0.1.0.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-universal
+            os: macos-latest
+            # built with lipo in the step below
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # ---- macOS: build both arches and lipo into a universal binary -------
+      - name: Build (macOS universal)
+        if: matrix.name == 'macos-universal'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create -output dist/capslkagent \
+            target/aarch64-apple-darwin/release/capslkagent \
+            target/x86_64-apple-darwin/release/capslkagent
+          tar -czf capslkagent-macos-universal.tar.gz -C dist capslkagent
+
+      # ---- Linux -----------------------------------------------------------
+      - name: Build (Linux)
+        if: startsWith(matrix.name, 'linux')
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/capslkagent dist/
+          tar -czf capslkagent-${{ matrix.name }}.tar.gz -C dist capslkagent
+
+      # ---- Windows ---------------------------------------------------------
+      - name: Build (Windows)
+        if: matrix.name == 'windows-x86_64'
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+          mkdir dist
+          copy target\${{ matrix.target }}\release\capslkagent.exe dist\
+          Compress-Archive -Path dist\capslkagent.exe -DestinationPath capslkagent-windows-x86_64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: capslkagent-${{ matrix.name }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+          generate_release_notes: true
