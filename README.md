@@ -22,7 +22,7 @@ avoids the caps-lock caveat below entirely.
 ### Homebrew (macOS/Linux)
 
 ```sh
-brew install jagenaujagenau/capslkagent
+brew install jagenaujagenau/tap/capslkagent
 ```
 
 ### From source
