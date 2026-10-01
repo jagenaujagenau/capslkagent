@@ -1,7 +1,7 @@
 # capslkagent
 
-Turn your keyboard's **Caps Lock LED** into a status light for the Claude Code
-agent:
+Turn your keyboard's **Caps Lock LED** into a status light for your coding
+agent — Claude Code, Codex, pi, oh-my-pi (omp), Amp or opencode:
 
 | LED state | Meaning |
 |-----------|---------|
@@ -33,26 +33,42 @@ cargo build --release
 cp target/release/capslkagent ~/.local/bin/
 ```
 
-### Wire it into Claude Code
+### Wire it into your agent
 
 ```sh
-capslkagent install-hooks              # caps lock LED
-capslkagent --backlight install-hooks  # or: keyboard backlight (macOS)
+capslkagent install-hooks                      # Claude Code (default)
+capslkagent install-hooks --agent codex        # or: codex, pi, omp, amp, opencode
+capslkagent install-hooks --agent all          # every agent set up on this machine
+capslkagent --backlight install-hooks          # keyboard backlight instead (macOS)
 ```
 
 Build on each platform you use (or cross-compile with the matching Rust
-target). `install-hooks` wires the indicator into Claude Code's hook system
-(`~/.claude/settings.json`) using the binary's own absolute path:
+target). `install-hooks` points the agent at the binary's own absolute path,
+so re-run it if you move the binary. It is idempotent, and
+`uninstall-hooks --agent <name>` (or `--agent all`) removes the integration.
 
-- `UserPromptSubmit` → LED on (agent started working)
-- `Stop` → LED off (agent finished)
-- `Notification` → LED blinks (agent is waiting on you)
-- `SessionEnd` → LED off (cleanup)
+| Agent | What gets installed | On | Blink | Off |
+|-------|---------------------|----|-------|-----|
+| Claude Code | hooks in `~/.claude/settings.json` | `UserPromptSubmit` | `Notification` | `Stop`, `SessionEnd` |
+| Codex | hooks in `~/.codex/hooks.json` | `UserPromptSubmit` | `PermissionRequest` | `Stop`, `Interrupt`, `SessionEnd` |
+| pi | extension `~/.pi/agent/extensions/capslkagent.ts` | `agent_start` | extension dialogs (`ui_prompt_start`) | `agent_settled`, `session_shutdown` |
+| omp | extension `~/.omp/agent/extensions/capslkagent.ts` | `agent_start` | `tool_approval_requested` | `agent_end`, `session_shutdown` |
+| Amp | plugin `~/.config/amp/plugins/capslkagent.ts` | `agent.start` | thread state `awaiting-approval` | `agent.end`, shutdown |
+| opencode | plugin `~/.config/opencode/plugins/capslkagent.js` | `session.status` busy | `permission.asked`, `question.asked` | `session.status` idle |
 
-Restart your Claude Code session to pick up the hooks. Existing hooks in
-settings.json are preserved; re-running `install-hooks` is idempotent (it
-replaces its own entries, e.g. after moving the binary). Remove them any time
-with `capslkagent uninstall-hooks`.
+Notes per agent:
+
+- **Claude Code / Codex** — existing hooks are preserved; only capslkagent's
+  own entries are added or replaced. `CLAUDE_CONFIG_DIR` / `CODEX_HOME` are
+  honoured. **Codex asks you to trust new hooks**: run `/hooks` in Codex once
+  after installing.
+- **pi, omp, Amp, opencode** — these load JS/TS plugins, so capslkagent writes
+  one small managed file that runs the binary. It never overwrites or deletes
+  a file it didn't write. Restart the agent (or reload plugins) to pick it up.
+  `PI_CODING_AGENT_DIR` and `XDG_CONFIG_HOME` are honoured.
+- Subagents (opencode task sessions, omp subagents) don't drive the light.
+- pi has no built-in permission prompts, so it only blinks for extension
+  dialogs.
 
 ## Manual usage
 
@@ -74,7 +90,7 @@ permission prompt). This is detected via the
 system's HID idle timer (no accessibility permissions needed), so it works even
 though the daemon has no window focus. On macOS and Windows this is automatic;
 on Linux there's no permission-free system-wide idle source, so blinking there
-stops on the next `on`/`off` instead (e.g. Claude Code's next prompt submit).
+stops on the next `on`/`off` instead (e.g. the agent's next prompt).
 
 All commands accept `--target capslock|backlight` (or the `--backlight`
 shorthand) to pick which light to drive; caps lock is the default.

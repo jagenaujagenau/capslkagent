@@ -1,17 +1,20 @@
-//! capslkagent: drive a keyboard light as a Claude Code status light.
+//! capslkagent: drive a keyboard light as a coding-agent status light.
 //!
 //!   on     - agent is working (solid light)
 //!   blink  - agent needs your attention (flashing light)
 //!   off    - agent is idle (light off / restored)
 
+mod agents;
 mod daemon;
 mod hooks;
 mod led;
 
+use agents::Agent;
 use led::Target;
+use std::path::Path;
 
 const USAGE: &str = "\
-capslkagent - Claude Code agent status via a keyboard light
+capslkagent - coding agent status via a keyboard light
 
 usage: capslkagent [--target capslock|backlight] <command>
 
@@ -21,8 +24,19 @@ commands:
   blink [interval]    flash the light (agent needs attention); default 0.4s
   toggle              flip the light
   status              print current light state
-  install-hooks       wire into Claude Code (~/.claude/settings.json)
-  uninstall-hooks     remove the Claude Code hooks
+  install-hooks [--agent NAME] [path]
+                      wire into a coding agent (default: claude)
+  uninstall-hooks [--agent NAME] [path]
+                      remove that integration
+
+agents (--agent):
+  claude              Claude Code hooks (~/.claude/settings.json)
+  codex               Codex hooks (~/.codex/hooks.json)
+  pi                  pi extension (~/.pi/agent/extensions/)
+  omp                 oh-my-pi extension (~/.omp/agent/extensions/)
+  amp                 Amp plugin (~/.config/amp/plugins/)
+  opencode            opencode plugin (~/.config/opencode/plugins/)
+  all                 every agent above that is set up on this machine
 
 targets:
   capslock            the Caps Lock LED (default; macOS, Linux, Windows)
@@ -52,6 +66,58 @@ fn parse_target(args: &mut Vec<String>) -> Result<Target, String> {
         }
     }
     Ok(target)
+}
+
+/// Pull `--agent NAME` out of `args`. `None` means not given.
+fn parse_agents(args: &mut Vec<String>) -> Result<Option<Vec<Agent>>, String> {
+    let Some(i) = args.iter().position(|a| a == "--agent" || a == "-a") else {
+        return Ok(None);
+    };
+    let value = args
+        .get(i + 1)
+        .ok_or("--agent requires a value (claude, codex, pi, omp, amp, opencode, all)")?
+        .clone();
+    args.drain(i..i + 2);
+    if value == "all" {
+        return Ok(Some(agents::ALL.iter().copied().filter(|a| a.detected()).collect()));
+    }
+    let agent = Agent::parse(&value).ok_or_else(|| format!("Unknown agent: {value}"))?;
+    Ok(Some(vec![agent]))
+}
+
+/// install-hooks / uninstall-hooks for one or more agents.
+fn integrate(args: &mut Vec<String>, install: bool, target: Target) -> Result<i32, String> {
+    let selected = parse_agents(args)?;
+    let selected = selected.unwrap_or_else(|| vec![Agent::Claude]);
+    let path = args.get(1).map(Path::new);
+    if path.is_some() && selected.len() != 1 {
+        return Err("A custom path needs a single --agent".into());
+    }
+    if selected.is_empty() {
+        println!("No supported coding agents found on this machine.");
+        return Ok(0);
+    }
+    let mut failed = false;
+    for agent in selected {
+        let result = if install {
+            agents::install(agent, path, target)
+        } else {
+            agents::uninstall(agent, path)
+        };
+        let name = agent.display_name();
+        match result {
+            Ok(p) if install => {
+                println!("{name}: installed in {}", p.display());
+                println!("  {}", agent.next_step());
+            }
+            Ok(p) => println!("{name}: removed from {}", p.display()),
+            Err(e) => {
+                eprintln!("{name}: error: {e}");
+                failed = true;
+            }
+        }
+    }
+    Ok(if failed { 1 } else { 0 })
 }
 
 fn parse_interval(s: &str) -> Result<f64, String> {
@@ -96,17 +162,8 @@ fn run() -> Result<i32, String> {
             daemon::start(interval, target)?;
             Ok(0)
         }
-        "install-hooks" => {
-            let path = hooks::install(args.get(1).map(String::as_str), target)?;
-            println!("Hooks installed in {}", path.display());
-            println!("Restart Claude Code sessions to pick them up.");
-            Ok(0)
-        }
-        "uninstall-hooks" => {
-            let path = hooks::uninstall(args.get(1).map(String::as_str))?;
-            println!("Hooks removed from {}", path.display());
-            Ok(0)
-        }
+        "install-hooks" => integrate(&mut args, true, target),
+        "uninstall-hooks" => integrate(&mut args, false, target),
         "status" => {
             // Read-only: don't disturb a running blink.
             if daemon::running() {

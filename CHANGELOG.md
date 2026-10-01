@@ -39,6 +39,11 @@ follows [Semantic Versioning](https://semver.org/).
   now wait for the daemon to exit first.
 
 ### Added
+- Support for more coding agents: `install-hooks --agent codex|pi|omp|amp|opencode`
+  (Claude Code stays the default). Codex gets hooks in `~/.codex/hooks.json`;
+  pi, omp, Amp and opencode get a small managed plugin file that runs the
+  binary. `--agent all` installs for every agent set up on the machine.
+- `CLAUDE_CONFIG_DIR` is honoured when locating Claude Code's settings.
 - CI workflow running clippy and the tests on macOS, Linux and Windows.
 - Unit tests for hook install/uninstall.
 
