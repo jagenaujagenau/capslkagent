@@ -9,8 +9,8 @@ agent:
 | Blinking  | Agent needs your attention (permission prompt / notification) |
 | Off       | Agent is idle |
 
-Cross-platform (macOS, Linux, Windows). Written in Rust — one small static
-binary (~400 KB), no runtime dependencies.
+Cross-platform (macOS, Linux, Windows). Written in Rust — one small
+binary (~400 KB), no runtime dependencies beyond the OS (libc on Linux).
 
 On Mac laptops you can alternatively use the **keyboard backlight** as the
 indicator (`--backlight`) — solid bright while the agent works, flashing when
@@ -61,14 +61,16 @@ capslkagent on          # solid LED
 capslkagent blink       # flash (default 0.4s); `blink 0.2` for faster
 capslkagent off         # LED off (also stops blinking)
 capslkagent toggle
-capslkagent status      # print on/off
+capslkagent status      # print on/off/blinking (doesn't stop a blink)
 ```
 
 `blink` spawns a small detached daemon; any subsequent `on`/`off` kills it and
 restores a steady state.
 
 **Blinking stops as soon as you touch the keyboard or mouse** — pressing any
-key acknowledges the alert and turns the light off. This is detected via the
+key acknowledges the alert and returns the light to its state before blinking
+started (e.g. solid on if the agent is still working after you approve a
+permission prompt). This is detected via the
 system's HID idle timer (no accessibility permissions needed), so it works even
 though the daemon has no window focus. On macOS and Windows this is automatic;
 on Linux there's no permission-free system-wide idle source, so blinking there

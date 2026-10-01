@@ -54,6 +54,17 @@ fn parse_target(args: &mut Vec<String>) -> Result<Target, String> {
     Ok(target)
 }
 
+fn parse_interval(s: &str) -> Result<f64, String> {
+    match s.parse::<f64>() {
+        Ok(v) if (daemon::MIN_INTERVAL..=daemon::MAX_INTERVAL).contains(&v) => Ok(v),
+        _ => Err(format!(
+            "Invalid interval: {s} (expected seconds between {} and {})",
+            daemon::MIN_INTERVAL,
+            daemon::MAX_INTERVAL
+        )),
+    }
+}
+
 fn run() -> Result<i32, String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let target = parse_target(&mut args)?;
@@ -73,15 +84,13 @@ fn run() -> Result<i32, String> {
                 .get(2)
                 .and_then(|s| Target::parse(s))
                 .unwrap_or(Target::CapsLock);
-            daemon::run(interval, target)
+            let restore = args.get(3).is_some_and(|s| s == "1");
+            daemon::run(interval, target, restore)
         }
         "blink" => {
             let interval: f64 = args
                 .get(1)
-                .map(|s| {
-                    s.parse()
-                        .map_err(|_| format!("Invalid interval: {s}"))
-                })
+                .map(|s| parse_interval(s))
                 .transpose()?
                 .unwrap_or(0.4);
             daemon::start(interval, target)?;
@@ -98,17 +107,27 @@ fn run() -> Result<i32, String> {
             println!("Hooks removed from {}", path.display());
             Ok(0)
         }
-        "on" | "off" | "toggle" | "status" => {
-            daemon::stop();
+        "status" => {
+            // Read-only: don't disturb a running blink.
+            if daemon::running() {
+                println!("blinking");
+                return Ok(0);
+            }
+            match led::backend(target)?.get() {
+                Some(true) => println!("on"),
+                Some(false) => println!("off"),
+                None => println!("unknown"),
+            }
+            Ok(0)
+        }
+        "on" | "off" | "toggle" => {
+            let restore = daemon::stop();
             let backend = led::backend(target)?;
             match cmd {
-                "status" => match backend.get() {
-                    Some(true) => println!("on"),
-                    Some(false) => println!("off"),
-                    None => println!("unknown"),
-                },
                 "toggle" => {
-                    let cur = backend.get().unwrap_or(false);
+                    // Mid-blink the LED state is arbitrary; toggle relative to
+                    // the state blinking would have returned to.
+                    let cur = restore.or_else(|| backend.get()).unwrap_or(false);
                     backend.set(!cur)?;
                 }
                 _ => backend.set(cmd == "on")?,

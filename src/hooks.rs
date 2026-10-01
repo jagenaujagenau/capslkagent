@@ -62,7 +62,14 @@ fn is_ours(entry: &Value) -> bool {
 /// hook silently no-ops instead of erroring and disrupting Claude Code.
 #[cfg(not(windows))]
 fn hook_command(exe: &str, targ: &str, action: &str) -> String {
-    format!("[ -x \"{exe}\" ] && \"{exe}\"{targ} {action} || true")
+    let exe = shell_quote(exe);
+    format!("[ -x {exe} ] && {exe}{targ} {action} || true")
+}
+
+/// Single-quote for sh, so paths containing `"`, `$` or backticks are safe.
+#[cfg(not(windows))]
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 #[cfg(windows)]
@@ -91,9 +98,13 @@ fn strip_ours(hooks: &mut Map<String, Value>) {
 
 pub fn install(path_arg: Option<&str>, target: crate::led::Target) -> Result<PathBuf, String> {
     let path = settings_path(path_arg)?;
-    let mut settings = load(&path)?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe = exe.to_string_lossy().to_string();
+    install_at(&path, &exe.to_string_lossy(), target)?;
+    Ok(path)
+}
+
+fn install_at(path: &PathBuf, exe: &str, target: crate::led::Target) -> Result<(), String> {
+    let mut settings = load(path)?;
     let targ = if target != crate::led::Target::CapsLock {
         format!(" --target {}", target.as_str())
     } else {
@@ -108,7 +119,7 @@ pub fn install(path_arg: Option<&str>, target: crate::led::Target) -> Result<Pat
     strip_ours(hooks);
     for (event, action) in EVENTS {
         let entry = json!({
-            "hooks": [{"type": "command", "command": hook_command(&exe, &targ, action)}]
+            "hooks": [{"type": "command", "command": hook_command(exe, &targ, action)}]
         });
         hooks
             .entry(*event)
@@ -117,8 +128,7 @@ pub fn install(path_arg: Option<&str>, target: crate::led::Target) -> Result<Pat
             .ok_or_else(|| format!("hooks.{event} is not an array"))?
             .push(entry);
     }
-    save(&path, &settings)?;
-    Ok(path)
+    save(path, &settings)
 }
 
 pub fn uninstall(path_arg: Option<&str>) -> Result<PathBuf, String> {
@@ -129,7 +139,91 @@ pub fn uninstall(path_arg: Option<&str>) -> Result<PathBuf, String> {
     let mut settings = load(&path)?;
     if let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) {
         strip_ours(hooks);
+        if hooks.is_empty() {
+            settings.remove("hooks");
+        }
     }
     save(&path, &settings)?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::led::Target;
+
+    fn temp_settings(name: &str, contents: Option<&str>) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("capslkagent-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        match contents {
+            Some(c) => fs::write(&path, c).unwrap(),
+            None => {
+                let _ = fs::remove_file(&path);
+            }
+        }
+        path
+    }
+
+    fn read(path: &PathBuf) -> Value {
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    const EXE: &str = "/opt/bin/capslkagent";
+
+    #[test]
+    fn install_is_idempotent_and_preserves_other_hooks() {
+        let foreign = r#"{"model":"x","hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}]}}"#;
+        let path = temp_settings("idempotent.json", Some(foreign));
+        install_at(&path, EXE, Target::CapsLock).unwrap();
+        let once = read(&path);
+        install_at(&path, EXE, Target::CapsLock).unwrap();
+        assert_eq!(once, read(&path));
+
+        assert_eq!(once["model"], "x");
+        let stop = once["hooks"]["Stop"].as_array().unwrap();
+        assert_eq!(stop.len(), 2);
+        assert_eq!(stop[0]["hooks"][0]["command"], "say done");
+        for (event, action) in EVENTS {
+            let entries = once["hooks"][event].as_array().unwrap();
+            let cmd = entries.last().unwrap()["hooks"][0]["command"].as_str().unwrap();
+            assert!(cmd.contains(EXE) && cmd.contains(action), "{event}: {cmd}");
+        }
+    }
+
+    #[test]
+    fn uninstall_restores_original() {
+        let foreign = r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}]}}"#;
+        let path = temp_settings("restore.json", Some(foreign));
+        install_at(&path, EXE, Target::Backlight).unwrap();
+        assert!(read(&path)["hooks"]["Notification"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--target backlight"));
+        uninstall(path.to_str()).unwrap();
+        assert_eq!(read(&path), serde_json::from_str::<Value>(foreign).unwrap());
+    }
+
+    #[test]
+    fn uninstall_drops_empty_hooks_object() {
+        let path = temp_settings("empty.json", None);
+        install_at(&path, EXE, Target::CapsLock).unwrap();
+        uninstall(path.to_str()).unwrap();
+        assert_eq!(read(&path), json!({}));
+    }
+
+    #[test]
+    fn rejects_non_object_settings() {
+        let path = temp_settings("array.json", Some("[]"));
+        assert!(install_at(&path, EXE, Target::CapsLock).is_err());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn hook_command_quotes_awkward_paths() {
+        let cmd = hook_command("/a b/it's/$x", "", "on");
+        assert_eq!(cmd, r#"[ -x '/a b/it'\''s/$x' ] && '/a b/it'\''s/$x' on || true"#);
+        let out = std::process::Command::new("sh").arg("-c").arg(&cmd).status().unwrap();
+        assert!(out.success());
+    }
 }

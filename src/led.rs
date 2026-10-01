@@ -156,24 +156,33 @@ mod backlight {
     }
 
     impl Led for Backend {
+        /// "On" means we've raised the backlight and hold the user's level
+        /// to restore, not merely that the backlight is lit.
         fn get(&self) -> Option<bool> {
-            Some(self.brightness() > 0.05)
+            Some(saved_brightness_file().exists())
         }
 
         fn set(&self, state: bool) -> Result<(), String> {
             let sav = saved_brightness_file();
             if state {
                 if !sav.exists() {
-                    let _ = fs::write(&sav, self.brightness().to_string());
+                    fs::write(&sav, self.brightness().to_string())
+                        .map_err(|e| format!("Cannot save current brightness: {e}"))?;
                 }
                 self.set_brightness(1.0)
             } else {
-                let original = fs::read_to_string(&sav)
+                // Nothing saved means we're already off; don't clobber the
+                // user's brightness (e.g. `Stop` followed by `SessionEnd`).
+                let Some(original) = fs::read_to_string(&sav)
                     .ok()
                     .and_then(|s| s.trim().parse::<f32>().ok())
-                    .unwrap_or(0.0);
+                else {
+                    let _ = fs::remove_file(&sav);
+                    return Ok(());
+                };
+                self.set_brightness(original.clamp(0.0, 1.0))?;
                 let _ = fs::remove_file(&sav);
-                self.set_brightness(original.clamp(0.0, 1.0))
+                Ok(())
             }
         }
     }
