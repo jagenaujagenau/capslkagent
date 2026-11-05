@@ -2,8 +2,9 @@
 //! records its pid, and any later `on`/`off` kills it first.
 //!
 //! The pidfile holds `<pid> <restore>`, where `restore` (0/1) is the light
-//! state from before blinking started; the daemon returns to it when the user
-//! acknowledges the alert.
+//! state the daemon returns to when the user acknowledges the alert: the state
+//! from before blinking started, except that caps lock the agent turned on
+//! counts as off, so the user doesn't keep typing in capitals.
 
 use std::fs;
 use std::path::PathBuf;
@@ -15,6 +16,13 @@ use crate::led;
 /// Accepted range for the blink interval, in seconds.
 pub const MIN_INTERVAL: f64 = 0.05;
 pub const MAX_INTERVAL: f64 = 60.0;
+
+/// How often the daemon checks for user input while blinking.
+const INPUT_POLL: Duration = Duration::from_millis(20);
+
+/// Longest a blink keeps caps lock on, in seconds. A key pressed in this window
+/// comes out capitalized, because input is only visible once it has happened.
+const MAX_CAPS_LIT: f64 = 0.1;
 
 fn pidfile() -> PathBuf {
     let user = std::env::var("USER")
@@ -34,6 +42,21 @@ fn read_pidfile() -> Option<(u32, bool)> {
     let pid = parts.next()?.parse().ok()?;
     let restore = parts.next() == Some("1");
     Some((pid, restore))
+}
+
+/// Exists while caps lock is on only because `on` turned it on.
+fn agent_lit_file() -> PathBuf {
+    pidfile().with_extension("agent-lit")
+}
+
+/// Record that the agent, not the user, turned caps lock on.
+pub fn mark_agent_lit() {
+    let _ = fs::write(agent_lit_file(), "");
+}
+
+/// Forget that record. Returns whether there was one.
+pub fn clear_agent_lit() -> bool {
+    fs::remove_file(agent_lit_file()).is_ok()
 }
 
 /// Kill a running blink daemon, if any. Returns the light state it would have
@@ -94,11 +117,12 @@ fn kill(pid: u32) -> bool {
 }
 
 pub fn start(interval: f64, target: led::Target) -> Result<(), String> {
+    let agent_lit = clear_agent_lit();
     // If we're replacing a running daemon, keep its restore state: the light
     // is mid-blink now, so reading it would be meaningless.
     let restore = match stop() {
         Some(restore) => restore,
-        None => led::backend(target)?.get().unwrap_or(false),
+        None => led::backend(target)?.get().unwrap_or(false) && !agent_lit,
     };
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(exe);
@@ -127,6 +151,20 @@ pub fn start(interval: f64, target: led::Target) -> Result<(), String> {
     Ok(())
 }
 
+/// Lit and dark durations of one blink cycle. A target that changes what the
+/// user types stays lit only briefly, within the same overall period.
+fn phases(interval: f64, target: led::Target) -> (Duration, Duration) {
+    let lit = if target.shifts_typing() {
+        interval.min(MAX_CAPS_LIT)
+    } else {
+        interval
+    };
+    (
+        Duration::from_secs_f64(lit),
+        Duration::from_secs_f64(2.0 * interval - lit),
+    )
+}
+
 /// Remove the pidfile if it still points at this process (a newer `blink`
 /// may already have replaced it).
 fn release_pidfile() {
@@ -137,8 +175,8 @@ fn release_pidfile() {
 
 /// The daemon loop itself (runs in the spawned process).
 ///
-/// Blinks until the user touches an input device, then restores the light to
-/// its pre-blink state and exits — pressing any key (or moving the mouse)
+/// Blinks until the user touches an input device, then restores the light and
+/// exits — pressing any key (or moving the mouse)
 /// acknowledges the alert. We detect this via the system's HID idle time: it
 /// climbs steadily while idle and drops to ~0 on any input.
 ///
@@ -150,16 +188,22 @@ pub fn run(interval: f64, target: led::Target, restore: bool) -> ! {
         release_pidfile();
         std::process::exit(1);
     };
-    let interval = interval.clamp(MIN_INTERVAL, MAX_INTERVAL);
+    let (lit, dark) = phases(interval.clamp(MIN_INTERVAL, MAX_INTERVAL), target);
     let mut state = true;
     loop {
         let _ = backend.set(state);
+        let phase = if state { lit } else { dark };
         state = !state;
-        let baseline = system_idle_millis();
+        let Some(prev) = system_idle_millis() else {
+            std::thread::sleep(phase);
+            continue;
+        };
         let started = Instant::now();
-        std::thread::sleep(Duration::from_secs_f64(interval));
-
-        if let (Some(prev), Some(cur)) = (baseline, system_idle_millis()) {
+        while started.elapsed() < phase {
+            std::thread::sleep(INPUT_POLL.min(phase.saturating_sub(started.elapsed())));
+            let Some(cur) = system_idle_millis() else {
+                continue;
+            };
             // Without input, idle grows by exactly the elapsed time; allow a
             // little slack for timer granularity.
             let elapsed = started.elapsed().as_millis() as u64;
@@ -272,4 +316,26 @@ fn system_idle_millis() -> Option<u64> {
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn system_idle_millis() -> Option<u64> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caps_lock_pulses_briefly_within_the_same_period() {
+        let (lit, dark) = phases(0.4, led::Target::CapsLock);
+        assert_eq!(lit + dark, Duration::from_millis(800));
+        if led::Target::CapsLock.shifts_typing() {
+            assert_eq!(lit, Duration::from_millis(100));
+        }
+    }
+
+    #[test]
+    fn backlight_blinks_evenly() {
+        assert_eq!(
+            phases(0.4, led::Target::Backlight),
+            (Duration::from_millis(400), Duration::from_millis(400))
+        );
+    }
 }

@@ -180,14 +180,17 @@ fn run() -> Result<i32, String> {
         "on" | "off" | "toggle" => {
             let restore = daemon::stop();
             let backend = led::backend(target)?;
+            // Mid-blink the LED state is arbitrary; use the state blinking
+            // would have returned to.
+            let cur = restore.or_else(|| backend.get()).unwrap_or(false);
             match cmd {
-                "toggle" => {
-                    // Mid-blink the LED state is arbitrary; toggle relative to
-                    // the state blinking would have returned to.
-                    let cur = restore.or_else(|| backend.get()).unwrap_or(false);
-                    backend.set(!cur)?;
-                }
+                "toggle" => backend.set(!cur)?,
                 _ => backend.set(cmd == "on")?,
+            }
+            if cmd != "on" {
+                daemon::clear_agent_lit();
+            } else if !cur && target.shifts_typing() {
+                daemon::mark_agent_lit();
             }
             Ok(0)
         }

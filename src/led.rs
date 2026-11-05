@@ -32,6 +32,12 @@ impl Target {
             _ => None,
         }
     }
+
+    /// Whether lighting this target also makes typing produce capitals.
+    /// Linux's LED is independent of the typing state.
+    pub fn shifts_typing(self) -> bool {
+        self == Target::CapsLock && !cfg!(target_os = "linux")
+    }
 }
 
 pub fn backend(target: Target) -> Result<Box<dyn Led>, String> {

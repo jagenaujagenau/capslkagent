@@ -90,18 +90,26 @@ flowchart LR
 Each agent event runs `capslkagent on`, `off` or `blink`. `blink` starts a
 small detached daemon; the next `on`/`off` stops it.
 
-**Blinking stops as soon as you touch the keyboard or mouse.** The light then
-returns to its state from before the blink, e.g. solid on if the agent keeps
-working after you approve a permission prompt. This uses the system's HID idle
-timer, so no accessibility permission is needed. It works on macOS and
-Windows. Linux has no permission-free system-wide idle source, so there the
-blink stops on the agent's next event instead.
+**Blinking stops as soon as you touch the keyboard or mouse.** The daemon
+checks every 20ms. The light then returns to its state from before the blink,
+e.g. the backlight goes back to bright if the agent keeps working after you
+approve a permission prompt. This uses the system's HID idle timer, so no
+accessibility permission is needed. It works on macOS and Windows. Linux has no
+permission-free system-wide idle source, so there the blink stops on the
+agent's next event instead.
+
+**Caps lock ends up off unless you turned it on yourself.** On macOS and
+Windows the light is real caps lock, so if the agent lit it, acknowledging a
+blink turns it off and it stays off until the agent's next `on`. To keep
+capitals out of your text, blinks on these platforms light caps lock for at
+most 0.1s per cycle. A key that lands in that pulse still comes out as a
+capital, because input can only be seen after it happens.
 
 ### Manual usage
 
 ```sh
 capslkagent on          # solid light
-capslkagent blink       # flash (default 0.4s); `blink 0.2` for faster
+capslkagent blink       # flash (default every 0.4s); `blink 0.2` for faster
 capslkagent off         # light off (also stops blinking)
 capslkagent toggle
 capslkagent status      # print on/off/blinking (doesn't stop a blink)

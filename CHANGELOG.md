@@ -6,6 +6,18 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Blinking on macOS and Windows lights caps lock for at most 0.1s per cycle
+  instead of half of it, so a keypress is far less likely to land while caps
+  lock is on.
+
+### Fixed
+- Acknowledging a blink by typing left caps lock on if the agent had turned it
+  on, so your text came out in capitals. Caps lock now ends up off unless you
+  turned it on yourself.
+- The blink daemon only checked for input once per blink phase. It now checks
+  every 20ms, so caps lock stops blinking almost immediately.
+
 ## [0.2.0] - 2026-10-01
 
 ### Changed
