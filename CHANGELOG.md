@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-05
+
 ### Changed
 - Blinking on macOS and Windows lights caps lock for at most 0.1s per cycle
   instead of half of it, so a keypress is far less likely to land while caps
@@ -66,6 +68,7 @@ follows [Semantic Versioning](https://semver.org/).
   backlight as a Claude Code status light, with `install-hooks` /
   `uninstall-hooks`.
 
-[Unreleased]: https://github.com/jagenaujagenau/capslkagent/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jagenaujagenau/capslkagent/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jagenaujagenau/capslkagent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jagenaujagenau/capslkagent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jagenaujagenau/capslkagent/releases/tag/v0.1.0
